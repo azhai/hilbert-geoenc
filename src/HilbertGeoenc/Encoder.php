@@ -1,6 +1,31 @@
 <?php
 namespace HilbertGeoenc;
 
+
+if (!function_exists('binary_search')) {
+    /**
+     * 二分（折半）查找算法
+     */
+    function binary_search($target, $right, $compare)
+    {
+        assert(is_callable($compare));
+        $left = 0;
+        do {
+            $middle = $left + intval(($right - $left) / 2);
+            $sign = $compare($target, $middle);
+            if ($sign > 0) { //目标在右侧
+                $left = $middle;
+            } else if ($sign < 0) { //目标在左侧
+                $right = $middle;
+            } else {
+                break;
+            }
+        } while ($right - $left > 1);
+        return $middle;
+    }
+}
+
+
 /**
  * Geohash，使用Hilbert空间算法
  */
@@ -39,6 +64,10 @@ class Encoder
             9.54, //  954.394 cm
             4.77, //  477.197 cm
     ];
+    //经纬度
+    public $lng = 0.0;
+    public $lat = 0.0;
+    public $code = '';
 
     public static function encode_int4($code)
     {
@@ -65,7 +94,7 @@ class Encoder
         return [$x, $y];
     }
 
-    protected function _coord2int($lng, $lat, $dim)
+    public static function coord2int($lng, $lat, $dim)
     {
         assert($dim >= 1);
         $lat_y = ($lat + self::LAT_MAX) / 180.0 * $dim; //[0 ... dim)
@@ -76,7 +105,7 @@ class Encoder
         ];
     }
 
-    protected function _xy2hash($x, $y, $dim)
+    public static function xy2hash($x, $y, $dim)
     {
         $d = 0;
         $lvl = $dim >> 1;
@@ -90,18 +119,38 @@ class Encoder
         return $d;
     }
 
-    public function encode($lng, $lat, $prec = 22)
+    public function __construct($lng = 0, $lat = 0)
     {
-        assert($lng >= self::LNG_MIN && $lng <= self::LNG_MAX);
-        assert($lat >= self::LAT_MIN && $lat <= self::LAT_MAX);
-        $dim = 1 << (($prec * self::BITS_PER_CHAR) >> 1);
-        @list($x, $y) = $this->_coord2int($lng, $lat, $dim);
-        $code = $this->_xy2hash($x, $y, $dim);
-        $result = self::encode_int4($code);
-        return sprintf('%0' . $prec . 's', $result);
+        $this->update($lng, $lat);
     }
 
-    public function get_prelen($distance = 5000)
+    public function update($lng, $lat)
     {
+        assert($lng >= self::LNG_MIN && $lng <= self::LNG_MAX);
+        $this->lng = $lng;
+        assert($lat >= self::LAT_MIN && $lat <= self::LAT_MAX);
+        $this->lat = $lat;
+    }
+
+    public function encode($prec = 22)
+    {
+        $dim = 1 << (($prec * self::BITS_PER_CHAR) >> 1);
+        @list($x, $y) = self::coord2int($this->lng, $this->lat, $dim);
+        $code = self::encode_int4(self::xy2hash($x, $y, $dim));
+        return $this->code = sprintf('%0' . $prec . 's', $code);
+    }
+
+    public function get_prefix($distance = 5000)
+    {
+        $errs = & self::$prec_errors;
+        $compare = function($target, $middle) use ($errs) {
+            return $errs[$middle] - $target;
+        };
+        $right = count($errs) - 1;
+        $idx = binary_search($distance, $right, $compare);
+        if (empty($this->code) && $this->lat) {
+            $this->encode();
+        }
+        return substr($this->code, 0, $idx);
     }
 }
